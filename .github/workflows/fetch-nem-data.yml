@@ -2,7 +2,7 @@ name: Fetch NEM data
 
 on:
   schedule:
-    - cron: "0 * * * *" # hourly
+    - cron: "*/5 * * * *" # every 5 minutes
   workflow_dispatch: {}
 
 jobs:
@@ -24,4 +24,6 @@ jobs:
       - name: Fetch NEM data
         env:
           OPENELECTRICITY_API_KEY: ${{ secrets.OPENELECTRICITY_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python src/fetch_nem_data.py
