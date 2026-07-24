@@ -1,2 +1,3 @@
 openelectricity
 python-dotenv
+supabase
