@@ -13,3 +13,6 @@ venv/
 # Editor/OS
 .DS_Store
 .vscode/
+
+# Scratch/debug scripts, not part of the pipeline
+_tmp/
