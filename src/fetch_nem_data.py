@@ -30,9 +30,9 @@ INTERVAL = "5m"
 PRIMARY_GROUPING = "network_region"
 SECONDARY_GROUPING = "fueltech"
 
-# How far back to fetch on each run. Wider than the cron cadence so a missed
-# or failed run still gets fully backfilled by the next one; the upsert key
-# makes re-fetching the overlap harmless.
+# Fallback fetch window used only when no checkpoint exists yet (cold start -
+# e.g. first run against an empty table). Bounded deliberately so a cold
+# start doesn't fall through to the API's much wider (~4-day) default range.
 LOOKBACK = timedelta(hours=1)
 
 # NEM runs on a fixed UTC+10 "market time" year-round (no daylight saving),
@@ -63,15 +63,13 @@ class NemDataRow(TypedDict):
     storage_battery_mwh: float | None
 
 
-def fetch_nem_data(api_key: str) -> TimeSeriesResponse:
+def fetch_nem_data(api_key: str, date_start: datetime) -> TimeSeriesResponse:
     client = OEClient(api_key=api_key)
     return client.get_network_data(
         network_code=NETWORK_CODE,
         metrics=METRICS,
         interval=INTERVAL,
-        date_start=(datetime.now(timezone.utc) - LOOKBACK)
-        .astimezone(NETWORK_TIMEZONE)
-        .replace(tzinfo=None),
+        date_start=date_start,
         primary_grouping=PRIMARY_GROUPING,
         secondary_grouping=SECONDARY_GROUPING,
     )
@@ -156,6 +154,26 @@ def upsert_rows(client: Client, rows: list[NemDataRow]) -> int:
     return failed
 
 
+def get_checkpoint(client: Client) -> datetime | None:
+    """Return the most recent interval_start already stored in nem_data.
+
+    None signals a cold start (no rows yet) - the caller decides the fallback.
+    """
+    response = (
+        client.table(NEM_DATA_TABLE)
+        .select("interval_start")
+        .order("interval_start", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    if not response.data:
+        return None
+
+    latest = datetime.fromisoformat(response.data[0]["interval_start"])
+    return latest.astimezone(NETWORK_TIMEZONE).replace(tzinfo=None)
+
+
 def main() -> int:
     load_dotenv()
 
@@ -165,17 +183,30 @@ def main() -> int:
     supabase_url = os.environ.get("SUPABASE_URL")
     supabase_key = os.environ.get("SUPABASE_KEY")
 
-    required = [("OPENELECTRICITY_API_KEY", api_key)]
-    if not dry_run:
-        required += [("SUPABASE_URL", supabase_url), ("SUPABASE_KEY", supabase_key)]
+    required = [
+        ("OPENELECTRICITY_API_KEY", api_key),
+        ("SUPABASE_URL", supabase_url),
+        ("SUPABASE_KEY", supabase_key),
+    ]
 
     missing = [name for name, value in required if not value]
     if missing:
         logger.error("Missing required env var(s): %s", ", ".join(missing))
         return 1
 
+    client = create_client(supabase_url, supabase_key)
+
+    date_start = get_checkpoint(client)
+    if date_start is None:
+        logger.info("No checkpoint found, falling back to %s lookback", LOOKBACK)
+        date_start = (
+            (datetime.now(timezone.utc) - LOOKBACK)
+            .astimezone(NETWORK_TIMEZONE)
+            .replace(tzinfo=None)
+        )
+
     try:
-        data = fetch_nem_data(api_key)
+        data = fetch_nem_data(api_key, date_start)
     except Exception:
         logger.exception("Failed to fetch NEM data")
         return 1
@@ -190,7 +221,6 @@ def main() -> int:
         logger.info("Dry run: skipping upsert")
         return 0
 
-    client = create_client(supabase_url, supabase_key)
     failed = upsert_rows(client, rows)
     if failed:
         logger.error("%d row(s) failed to upsert", failed)
