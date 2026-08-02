@@ -1,0 +1,47 @@
+version: 2
+
+sources:
+  - name: supabase
+    schema: public
+    tables:
+      - name: nem_data
+        columns:
+          - name: network_region
+            data_tests:
+              - not_null
+              - accepted_values:
+                  arguments:
+                    values: ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1']
+          - name: fueltech
+            data_tests:
+              - not_null
+              - relationships:
+                  arguments:
+                    to: source('supabase', 'fueltech')
+                    field: fueltech
+          - name: interval_start
+            data_tests:
+              - not_null
+
+      - name: fueltech
+        columns:
+          - name: fueltech
+            data_tests:
+              - not_null
+              - unique
+          - name: fueltech_group
+            data_tests:
+              - relationships:
+                  arguments:
+                    to: source('supabase', 'fueltech_group')
+                    field: fueltech_group
+          - name: renewable
+            data_tests:
+              - not_null
+
+      - name: fueltech_group
+        columns:
+          - name: fueltech_group
+            data_tests:
+              - not_null
+              - unique
